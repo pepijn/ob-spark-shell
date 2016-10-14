@@ -1,0 +1,166 @@
+* ob-spark-shell
+
+A Scala spark-shell backend for [[http://orgmode.org][Org-mode]]'s [[http://orgmode.org/worg/org-contrib/babel/][Babel]].
+
+** Background
+
+The only way I currently use this in my workflow is by creating case classes for tests when writing new Spark jobs. First, I load the parquet file and print the schema (which is really fast). Second, I create a case class for my unit test based on the printed schema. Finally, I =df.as[T].show(1)= (T is the new case class), which shows the dataframe or throws an exception when the case class doesn't conform the production schema.
+
+To be honest, for the time being I'm using IntelliJ to write the tests and jobs. But having the Org-mode document available to quickly inspect production data gives the development of new ETL jobs a speed boost. I'm looking forward to using this to run ad-hoc jobs on an external cluster, too. I do not recommend using this on a cluster, yet.
+
+At this moment, it is not obvious how to connect to an external cluster. With some CLI arguments (see options), however, you can connect to any kind of cluster using the =--master= argument. Additionally, I once ran a remote spark-shell through an SSH tunnel (which consequently ran spark-shell through Docker). This is possible by supplying =ssh= as the program instead of =spark-shell= and supplying a bunch of arguments. I will add easy access to this functionality in the future, once the project is more stable.
+
+** Example
+
+*How does it work? Please check out the [[https://github.com/pepijn/ob-spark-shell/raw/master/README.org][raw version of this README]] to see the underlying Org-mode code.*
+
+In the following example, we will first create a dataframe ourselves with two people in it. After that, we read some data from a parquet file. To end the example, we join the two dataframes.
+
+*** Creating our own dataframe
+
+Create a dataframe with people using a Scala case class.
+
+#+BEGIN_SRC spark-shell :session example :exports both
+case class Person(name: String, age: Int)
+
+val people = Seq(
+  Person("Fred", 23),
+  Person("Sally", 42))
+
+val peopleDf = spark.createDataFrame(people)
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+defined class Person
+people: Seq[Person] = List(Person(Fred,23), Person(Sally,42))
+peopleDf: org.apache.spark.sql.DataFrame = [name: string, age: int]
+#+end_example
+
+How many people are in this dataframe?
+
+#+BEGIN_SRC spark-shell :session example :exports both
+peopleDf.count
+#+END_SRC
+
+#+RESULTS:
+: res39: Long = 2
+
+=ob-spark-shell= recognizes Spark table outputs and returns them as Org-mode tables.
+
+#+BEGIN_SRC spark-shell :session example :exports both
+peopleDf.show
+#+END_SRC
+
+#+RESULTS:
+| name  | age |
+|-------+-----|
+| Fred  |  23 |
+| Sally |  42 |
+|-------+-----|
+
+*** Reading parquet file
+
+We store the location of a parquet file in the =passions-parquet= variable, below.
+
+#+NAME: passions-parquet
+: doc/passions.parquet
+
+In the following code block, we expose the =passions-parquet= variable (as =passions_parquet=) to the spark-shell and then we load the parquet file and count the results.
+
+#+BEGIN_SRC spark-shell :session example :exports both :var passions_parquet=passions-parquet
+val passionsDf = spark.read.load(passions_parquet)
+passionsDf.count
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+passionsDf: org.apache.spark.sql.DataFrame = [person: string, thing: string]
+res43: Long = 2
+#+end_example
+
+What is in the dataframe?
+
+#+BEGIN_SRC spark-shell :session example :exports both :var passions_parquet=passions-parquet
+passionsDf.show
+#+END_SRC
+
+#+RESULTS:
+| person | thing     |
+|--------+-----------|
+| Sally  | Ice cream |
+| Fred   | Pizza     |
+|--------+-----------|
+
+*** Joining them
+
+To finish this example, let's join the two dataframes that we made so far.
+
+#+BEGIN_SRC spark-shell :session example :exports both
+import org.apache.spark.sql.functions._
+val df = peopleDf.
+  join(passionsDf, $"name" === $"person").
+  select($"person", $"age", $"thing".as("likes"))
+
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+import org.apache.spark.sql.functions._
+df: org.apache.spark.sql.DataFrame = [person: string, age: int ... 1 more field]
+#+end_example
+
+Now we have everything in one place :-)
+
+#+BEGIN_SRC spark-shell :session example :exports both
+df.show
+#+END_SRC
+
+#+RESULTS:
+| person | age | likes     |
+|--------+-----+-----------|
+| Fred   |  23 | Pizza     |
+| Sally  |  42 | Ice cream |
+|--------+-----+-----------|
+
+
+** Options
+
+=ob-spark-shell-program=: specify the path of your =spark-shell= program.
+
+=ob-spark-shell-cli-args=: add your own CLI args. Disables the progress bar by
+default (=spark.ui.showConsoleProgress=false=).
+
+** Limitations
+
+- Lacks var type reflection; all vars are Scala strings.
+
+** Acknowledgements
+
+Built at [[https://www.nubank.com.br][Nubank]].
+
+Some code taken from:
+
+- =ob-ipython=: https://github.com/gregsexton/ob-ipython/
+- =cexl=: https://github.com/krisajenkins/cexl
+
+#+BEGIN_SRC spark-shell :session example :exports none
+// Create parquet file
+case class Passion(person: String, thing: String)
+
+val passions = Seq(
+  Passion("Fred", "Pizza"),
+  Passion("Sally", "Ice cream"))
+
+val df = spark.createDataFrame(passions)
+df.repartition(1).write.
+  option("compression", "none").
+  parquet("doc/passions.parquet")
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+defined class Passion
+passions: Seq[Passion] = List(Passion(Fred,Pizza), Passion(Sally,Ice cream))
+df: org.apache.spark.sql.DataFrame = [person: string, thing: string]
+#+end_example
